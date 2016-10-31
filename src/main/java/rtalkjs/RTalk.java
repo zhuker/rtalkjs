@@ -113,7 +113,17 @@ public class RTalk {
                         r.quit();
                     });
                 });
-        
+        program.command("reserve").$action((cmd) -> {
+            String tube = toStr($get(program, "tube"));
+            console.log("reserve", tube);
+            String url = toStr($get(program, "url"));
+            NodeRedis r = NodeRedis.createClient(url);
+            RTalk rtalk = new RTalk(r, tube);
+            rtalk.reserve(0).$then(response -> {
+                console.log(response);
+                r.quit();
+            });
+        });
         program.command("touch <jobid>").$action((jobid, cmd) -> {
             String tube = toStr($get(program, "tube"));
             console.log("touch", tube, jobid);
@@ -831,6 +841,7 @@ public class RTalk {
     }
 
     private Promise<Job> _getJob(NodeRedis r, String id) {
+        long now = currentTimeMillis();
         Promise<Map<String, String>> _job = r.hgetallAsync(kJob(id));
         Promise<Job> then = _job.then(job -> {
             if (Platform.isEmptyMap(job))
@@ -847,6 +858,11 @@ public class RTalk {
                 }
                 j.tube = job.$get(fTube);
                 j.state = job.$get(fState);
+                if (Job.DELAYED.equals(j.state) || Job.RESERVED.equals(j.state)) {
+                    if (j.readyTime <= now) {
+                        j.state = Job.READY;
+                    }
+                }
                 j.pri = toLong(job.$get(fPriority));
                 j.data = job.$get(fData);
                 j.ttrMsec = toLong(job.$get(fTtr));
@@ -930,25 +946,27 @@ public class RTalk {
         Multi m = r.multi();
         m.zcard(kReadyQueue);
         m.zcount(kDelayQueue, 0, now);
-        m.zcard(kDelayQueue);
+        m.zcount(kDelayQueue, now + 1, Double.POSITIVE_INFINITY);
         m.zcard(kBuried);
         m.get(kReserveCount);
         m.get(kDeleteCount);
+        m.zcard(kDelayQueue);
 
         return m.execAsync().then(arr -> {
             long zkReadyQueue = toLong(arr.$get(0));
             long zkDelayQueueNow = toLong(arr.$get(1));
-            long zkDelayQueue = toLong(arr.$get(2));
+            long zkDelayQueueFuture = toLong(arr.$get(2));
             long zkBuried = toLong(arr.$get(3));
             long zkReserveCount = toLong(arr.$get(4));
             long zkDeleteCount = toLong(arr.$get(5));
+            long zkDelayQueue = toLong(arr.$get(6));
             StatsTube stats = new StatsTube();
             stats.name = tube;
             stats.currentjobsready = zkReadyQueue + zkDelayQueueNow;
-            stats.currentjobsdelayed = zkDelayQueue;
+            stats.currentjobsdelayed = zkDelayQueueFuture;
             stats.currentjobsburied = zkBuried;
             stats.currentjobsreserved = zkReserveCount;
-            stats.totaljobs = zkReadyQueue + zkDelayQueue;
+            stats.totaljobs = zkReadyQueue + zkDelayQueue + zkBuried + zkDeleteCount;
             stats.cmddelete = zkDeleteCount;
             return resolve(stats);
         });

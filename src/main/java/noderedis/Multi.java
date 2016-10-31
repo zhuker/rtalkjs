@@ -30,42 +30,42 @@ public class Multi {
     }
 
     @Native
-    public void zrem(String kReadyQueue, String id) {
+    public void zrem(String key, String id) {
         throw new RuntimeException("TODO Multi.zrem");
     }
 
     @Native
-    public void decr(String kReserveCount) {
+    public void decr(String key) {
         throw new RuntimeException("TODO Multi.decr");
     }
 
     @Native
-    public void hincrby(String kJob, String fburies, int i) {
+    public void hincrby(String key, String fburies, int i) {
         throw new RuntimeException("TODO Multi.hincrBy");
     }
 
     @Native
-    public void incr(String kReserveCount) {
+    public void incr(String key) {
         throw new RuntimeException("TODO Multi.incr");
     }
 
     @Native
-    public void del(String kJob) {
+    public void del(String key) {
         throw new RuntimeException("TODO Multi.del");
     }
 
     @Native
-    public void zcard(String kReadyQueue) {
+    public void zcard(String key) {
         throw new RuntimeException("TODO Multi.zcard");
     }
 
     @Native
-    public void zcount(String kDelayQueue, int i, long now) {
+    public void zcount(String key, double min, double max) {
         throw new RuntimeException("TODO Multi.zcount");
     }
 
     @Native
-    public void get(String kReserveCount) {
+    public void get(String key) {
         throw new RuntimeException("TODO Multi.get");
     }
 

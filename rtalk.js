@@ -1025,9 +1025,10 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
     };
     constructor.main = function(args) {
         var program = require("commander");
-        program.version("0.0.1").option("-u, --url [url]", "Redis URL [redis://localhost:6379]", "redis://localhost:6379").command("stats-tube <tube>").action(function(tube) {
+        program.version("0.0.1").option("-u, --url [url]", "Redis URL [redis://localhost:6379/0]", "redis://localhost:6379/0").option("-t, --tube [tube]", "RTalk tube to use [default]", "default").command("stats-tube").action(function(e) {
+            var tube = RTalk.toStr((program)["tube"]);
             console.log("stats-tube", tube);
-            var url = (program)["url"];
+            var url = RTalk.toStr((program)["url"]);
             var r = NodeRedis.createClient(url);
             var rtalk = new RTalk(r, tube);
             rtalk.statsTube().then(function(response) {
@@ -1035,7 +1036,54 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                 r.quit();
             });
         });
-        program.command("stats-jobs <tube>").option("-H, --human", "Print in human-readable format").action(function(tube, cmd) {
+        program.command("kick-job <jobid>").action(function(jobid) {
+            var tube = RTalk.toStr((program)["tube"]);
+            console.log("kick-job", tube, jobid);
+            var url = (program)["url"];
+            var r = NodeRedis.createClient(url);
+            var rtalk = new RTalk(r, tube);
+            rtalk.kickJob(jobid).then(function(response) {
+                console.log(response);
+                r.quit();
+            });
+        });
+        program.command("bury <jobid>").option("-p, --priority [pri]", "Job priority").option("-r, --reason [reason]", "Bury reason text description").action(function(jobid, cmd) {
+            var tube = RTalk.toStr((program)["tube"]);
+            console.log("bury", tube, jobid);
+            var pri = RTalk.toLong((cmd)["priority"]);
+            var reason = RTalk.toStr((cmd)["reason"]);
+            var url = RTalk.toStr((program)["url"]);
+            var r = NodeRedis.createClient(url);
+            var rtalk = new RTalk(r, tube);
+            rtalk.bury(jobid, pri, reason).then(function(response) {
+                console.log(response);
+                r.quit();
+            });
+        });
+        program.command("reserve").action(function(cmd) {
+            var tube = RTalk.toStr((program)["tube"]);
+            console.log("reserve", tube);
+            var url = RTalk.toStr((program)["url"]);
+            var r = NodeRedis.createClient(url);
+            var rtalk = new RTalk(r, tube);
+            rtalk.reserve(0).then(function(response) {
+                console.log(response);
+                r.quit();
+            });
+        });
+        program.command("touch <jobid>").action(function(jobid, cmd) {
+            var tube = RTalk.toStr((program)["tube"]);
+            console.log("touch", tube, jobid);
+            var url = RTalk.toStr((program)["url"]);
+            var r = NodeRedis.createClient(url);
+            var rtalk = new RTalk(r, tube);
+            rtalk.touch(jobid).then(function(response) {
+                console.log(response);
+                r.quit();
+            });
+        });
+        program.command("stats-jobs").option("-H, --human", "Print in human-readable format").action(function(cmd) {
+            var tube = RTalk.toStr((program)["tube"]);
             console.log("stats-jobs", tube);
             var human = Boolean((cmd)["human"]);
             var url = (program)["url"];
@@ -1043,7 +1091,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
             var rtalk = new RTalk(r, tube);
             console.log(PrintJ.sprintf("%5.5s %19.19s %13.13s %4s %4s %4s %4s %4s %4s %s %s", "State", "Ready Time", "TTR Duration", "Pri", "Rsrv", "Rels", "Bury", "Kick", "Tout", "id", "data"));
             rtalk.statsJobs().finally(function() {
-                r.quit();
+                return r.quit();
             }).subscribe(function(job) {
                 if (human) {
                     var readyTime = Moment(job.readyTime).calendar();
@@ -1061,6 +1109,12 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
             program.help();
             return;
         }
+    };
+    constructor.toStr = function(obj) {
+        if (obj == null) {
+            return "";
+        }
+        return "" + obj;
     };
     constructor.escape = function(data) {
         if (data == null) 
@@ -1344,7 +1398,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                 if (reason != null) {
                     tx.hset(this.kJob(id), RTalk.fBuryReason, reason);
                 }
-                tx.hincrBy(this.kJob(id), RTalk.fBuries, 1);
+                tx.hincrby(this.kJob(id), RTalk.fBuries, 1);
                 tx.zadd(this.kBuried, Platform.currentTimeMillis(), id);
                 return tx.execAsync().then(stjs.bind(this, function(a) {
                     var response = this.Response(RTalk.BURIED, id, data);
@@ -1440,7 +1494,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                 tx.hset(this.kJob(id), RTalk.fPriority, Long.toString(pri));
                 tx.hset(this.kJob(id), RTalk.fState, delayMsec > 0 ? RTalk.Job.DELAYED : RTalk.Job.READY);
                 tx.decr(this.kReserveCount);
-                tx.hincrBy(this.kJob(id), RTalk.fReleases, 1);
+                tx.hincrby(this.kJob(id), RTalk.fReleases, 1);
             })).then(stjs.bind(this, function(a) {
                 return Promise.resolve(this.on(this.Response(RTalk.RELEASED, id)));
             }));
@@ -1478,7 +1532,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                 tx.hset(this.kJob(j.id), RTalk.fState, RTalk.Job.RESERVED);
                 tx.zrem(this.kReadyQueue, j.id);
                 tx.zadd(this.kDelayQueue, now + j.ttrMsec, j.id);
-                tx.hincrBy(this.kJob(j.id), RTalk.fReserves, 1);
+                tx.hincrby(this.kJob(j.id), RTalk.fReserves, 1);
                 tx.incr(this.kReserveCount);
             }))).map(stjs.bind(this, function(arr) {
                 return this.on(this.Response(RTalk.RESERVED, j.id, j.data));
@@ -1516,7 +1570,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
             }
             var r = this.getRedis();
             return this._getJob(r, id).then(stjs.bind(this, function(j) {
-                if (j == null) {
+                if (j == null || !RTalk.Job.RESERVED.equals(j.state)) {
                     return Promise.resolve(this.Response(RTalk.NOT_FOUND, id));
                 }
                 return r.zaddAsync(this.kDelayQueue, [Platform.currentTimeMillis() + j.ttrMsec, id]).then(stjs.bind(this, function(x) {
@@ -1599,7 +1653,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
     prototype._kickJob = function(id, now, tx, pri) {
         tx.zrem(this.kBuried, id);
         tx.hset(this.kJob(id), RTalk.fState, RTalk.Job.READY);
-        tx.hincrBy(this.kJob(id), RTalk.fKicks, 1);
+        tx.hincrby(this.kJob(id), RTalk.fKicks, 1);
         tx.zadd(this.kReadyQueue, pri, id);
     };
     /**
@@ -1689,9 +1743,14 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
         });
     };
     constructor.toLong = function(zcard) {
-        return zcard == null ? 0 : parseInt(zcard);
+        var i = parseInt(zcard);
+        if (isNaN(i)) {
+            return 0;
+        }
+        return i;
     };
     prototype._getJob = function(r, id) {
+        var now = Platform.currentTimeMillis();
         var _job = r.hgetallAsync(this.kJob(id));
         var then = _job.then(stjs.bind(this, function(job) {
             if (Platform.isEmptyMap(job)) 
@@ -1706,6 +1765,11 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                 }
                 j.tube = job[RTalk.fTube];
                 j.state = job[RTalk.fState];
+                if (RTalk.Job.DELAYED.equals(j.state) || RTalk.Job.RESERVED.equals(j.state)) {
+                    if (j.readyTime <= now) {
+                        j.state = RTalk.Job.READY;
+                    }
+                }
                 j.pri = RTalk.toLong(job[RTalk.fPriority]);
                 j.data = job[RTalk.fData];
                 j.ttrMsec = RTalk.toLong(job[RTalk.fTtr]);
@@ -1787,24 +1851,26 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
         var m = r.multi();
         m.zcard(this.kReadyQueue);
         m.zcount(this.kDelayQueue, 0, now);
-        m.zcard(this.kDelayQueue);
+        m.zcount(this.kDelayQueue, now + 1, Double.POSITIVE_INFINITY);
         m.zcard(this.kBuried);
         m.get(this.kReserveCount);
         m.get(this.kDeleteCount);
+        m.zcard(this.kDelayQueue);
         return m.execAsync().then(stjs.bind(this, function(arr) {
             var zkReadyQueue = RTalk.toLong(arr[0]);
             var zkDelayQueueNow = RTalk.toLong(arr[1]);
-            var zkDelayQueue = RTalk.toLong(arr[2]);
+            var zkDelayQueueFuture = RTalk.toLong(arr[2]);
             var zkBuried = RTalk.toLong(arr[3]);
             var zkReserveCount = RTalk.toLong(arr[4]);
             var zkDeleteCount = RTalk.toLong(arr[5]);
+            var zkDelayQueue = RTalk.toLong(arr[6]);
             var stats = new RTalk.StatsTube();
             stats.name = this.tube;
             stats.currentjobsready = zkReadyQueue + zkDelayQueueNow;
-            stats.currentjobsdelayed = zkDelayQueue;
+            stats.currentjobsdelayed = zkDelayQueueFuture;
             stats.currentjobsburied = zkBuried;
             stats.currentjobsreserved = zkReserveCount;
-            stats.totaljobs = zkReadyQueue + zkDelayQueue;
+            stats.totaljobs = zkReadyQueue + zkDelayQueue + zkBuried + zkDeleteCount;
             stats.cmddelete = zkDeleteCount;
             return Promise.resolve(stats);
         }));
