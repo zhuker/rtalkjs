@@ -40,7 +40,7 @@ public class Multi {
     }
 
     @Native
-    public void hincrBy(String kJob, String fburies, int i) {
+    public void hincrby(String kJob, String fburies, int i) {
         throw new RuntimeException("TODO Multi.hincrBy");
     }
 

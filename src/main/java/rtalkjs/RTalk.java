@@ -6,31 +6,24 @@ import static org.stjs.javascript.Global.console;
 import static org.stjs.javascript.JSCollections.$array;
 import static org.stjs.javascript.JSGlobal.Boolean;
 import static org.stjs.javascript.JSGlobal.JSON;
+import static org.stjs.javascript.JSGlobal.isNaN;
+import static org.stjs.javascript.JSGlobal.parseInt;
 import static org.stjs.javascript.JSObjectAdapter.$get;
 import static org.stjs.javascript.Promise.resolve;
 import static rtalkjs.Platform.currentTimeMillis;
 import static rtalkjs.PrintJ.sprintf;
 
-import javax.xml.soap.Node;
-
 import com.vg.js.bridge.Rx.Observable;
-import com.vg.js.node.FS;
-import com.vg.js.node.NodeJS;
 
 import org.stjs.javascript.Array;
-import org.stjs.javascript.Global;
-import org.stjs.javascript.JSGlobal;
-import org.stjs.javascript.JSObjectAdapter;
 import org.stjs.javascript.Map;
 import org.stjs.javascript.Promise;
 import org.stjs.javascript.annotation.Native;
 import org.stjs.javascript.functions.Callback1;
-import org.stjs.javascript.functions.Callback2;
 
 import commander.Commander;
 import noderedis.Multi;
 import noderedis.NodeRedis;
-import rtalkjs.RTalk.Job;
 
 public class RTalk {
 
@@ -78,11 +71,13 @@ public class RTalk {
         Commander program = require("commander");
         program
                 .version("0.0.1")
-                .option("-u, --url [url]", "Redis URL [redis://localhost:6379]", "redis://localhost:6379")
-                .command("stats-tube <tube>")
-                .action((tube) -> {
+                .option("-u, --url [url]", "Redis URL [redis://localhost:6379/0]", "redis://localhost:6379/0")
+                .option("-t, --tube [tube]", "RTalk tube to use [default]", "default")
+                .command("stats-tube")
+                .action((e) -> {
+                    String tube = toStr($get(program, "tube"));
                     console.log("stats-tube", tube);
-                    String url = (String) $get(program, "url");
+                    String url = toStr($get(program, "url"));
                     NodeRedis r = NodeRedis.createClient(url);
                     RTalk rtalk = new RTalk(r, tube);
                     rtalk.statsTube().$then(response -> {
@@ -90,33 +85,71 @@ public class RTalk {
                         r.quit();
                     });
                 });
-        program.command("stats-jobs <tube>").option("-H, --human", "Print in human-readable format").action(
-                (tube, cmd) -> {
-                    console.log("stats-jobs", tube);
-                    boolean human = Boolean($get(cmd, "human"));
-                    String url = (String) $get(program, "url");
+        program.command("kick-job <jobid>").action((jobid) -> {
+            String tube = toStr($get(program, "tube"));
+            console.log("kick-job", tube, jobid);
+            String url = (String) $get(program, "url");
+            NodeRedis r = NodeRedis.createClient(url);
+            RTalk rtalk = new RTalk(r, tube);
+            rtalk.kickJob(jobid).$then(response -> {
+                console.log(response);
+                r.quit();
+            });
+        });
+        program
+                .command("bury <jobid>")
+                .option("-p, --priority [pri]", "Job priority")
+                .option("-r, --reason [reason]", "Bury reason text description")
+                .$action((jobid, cmd) -> {
+                    String tube = toStr($get(program, "tube"));
+                    console.log("bury", tube, jobid);
+                    long pri = toLong($get(cmd, "priority"));
+                    String reason = toStr($get(cmd, "reason"));
+                    String url = toStr($get(program, "url"));
                     NodeRedis r = NodeRedis.createClient(url);
                     RTalk rtalk = new RTalk(r, tube);
-
-                    console.log(sprintf("%5.5s %19.19s %13.13s %4s %4s %4s %4s %4s %4s %s %s", "State", "Ready Time",
-                            "TTR Duration", "Pri", "Rsrv", "Rels", "Bury", "Kick", "Tout", "id", "data"));
-                    rtalk.statsJobs().$finally(() -> {
+                    rtalk.bury(jobid, pri, reason).$then(response -> {
+                        console.log(response);
                         r.quit();
-                    }).subscribe(job -> {
-                        if (human) {
-                            String readyTime = Moment.$invoke(job.readyTime).calendar();
-                            String duration = Moment.duration(job.ttrMsec).humanize();
-                            console.log(sprintf("%5.5s %19.19s %13.13s %3d %4d %4d %4d %4d %4d %s %s", job.state,
-                                    readyTime, duration, job.pri, job.reserves, job.releases, job.buries, job.kicks,
-                                    job.timeouts, job.id,
-                                    escape(job.data) + (job.error == null ? "" : " " + escape(job.error))));
-                        } else {
-                            console.log(JSON.stringify(job));
-                        }
-                    }, err -> {
-                        console.error("unhandled", err);
                     });
                 });
+        
+        program.command("touch <jobid>").$action((jobid, cmd) -> {
+            String tube = toStr($get(program, "tube"));
+            console.log("touch", tube, jobid);
+            String url = toStr($get(program, "url"));
+            NodeRedis r = NodeRedis.createClient(url);
+            RTalk rtalk = new RTalk(r, tube);
+            rtalk.touch(jobid).$then(response -> {
+                console.log(response);
+                r.quit();
+            });
+        });
+
+        program.command("stats-jobs").option("-H, --human", "Print in human-readable format").$action((cmd) -> {
+            String tube = toStr($get(program, "tube"));
+            console.log("stats-jobs", tube);
+            boolean human = Boolean($get(cmd, "human"));
+            String url = (String) $get(program, "url");
+            NodeRedis r = NodeRedis.createClient(url);
+            RTalk rtalk = new RTalk(r, tube);
+
+            console.log(sprintf("%5.5s %19.19s %13.13s %4s %4s %4s %4s %4s %4s %s %s", "State", "Ready Time",
+                    "TTR Duration", "Pri", "Rsrv", "Rels", "Bury", "Kick", "Tout", "id", "data"));
+            rtalk.statsJobs().$finally(() -> r.quit()).subscribe(job -> {
+                if (human) {
+                    String readyTime = Moment.$invoke(job.readyTime).calendar();
+                    String duration = Moment.duration(job.ttrMsec).humanize();
+                    console.log(sprintf("%5.5s %19.19s %13.13s %3d %4d %4d %4d %4d %4d %s %s", job.state, readyTime,
+                            duration, job.pri, job.reserves, job.releases, job.buries, job.kicks, job.timeouts, job.id,
+                            escape(job.data) + (job.error == null ? "" : " " + escape(job.error))));
+                } else {
+                    console.log(JSON.stringify(job));
+                }
+            }, err -> {
+                console.error("unhandled", err);
+            });
+        });
 
         program.parse(process.argv);
 
@@ -124,6 +157,13 @@ public class RTalk {
             program.help();
             return;
         }
+    }
+
+    private static String toStr(Object obj) {
+        if (obj == null) {
+            return "";
+        }
+        return "" + obj;
     }
 
     private static String escape(String data) {
@@ -434,7 +474,7 @@ public class RTalk {
                 if (reason != null) {
                     tx.hset(kJob(id), fBuryReason, reason);
                 }
-                tx.hincrBy(kJob(id), fBuries, 1);
+                tx.hincrby(kJob(id), fBuries, 1);
                 tx.zadd(kBuried, currentTimeMillis(), id);
 
                 return tx.execAsync().then(a -> {
@@ -542,7 +582,7 @@ public class RTalk {
                 tx.hset(kJob(id), fPriority, Long.toString(pri));
                 tx.hset(kJob(id), fState, delayMsec > 0 ? Job.DELAYED : Job.READY);
                 tx.decr(kReserveCount);
-                tx.hincrBy(kJob(id), fReleases, 1);
+                tx.hincrby(kJob(id), fReleases, 1);
             }).then(a -> resolve(on(Response(RELEASED, id))));
         });
     }
@@ -576,7 +616,7 @@ public class RTalk {
                 tx.hset(kJob(j.id), fState, Job.RESERVED);
                 tx.zrem(kReadyQueue, j.id);
                 tx.zadd(kDelayQueue, now + j.ttrMsec, j.id);
-                tx.hincrBy(kJob(j.id), fReserves, 1);
+                tx.hincrby(kJob(j.id), fReserves, 1);
                 tx.incr(kReserveCount);
             })).map(arr -> {
                 return on(Response(RESERVED, j.id, j.data));
@@ -616,7 +656,7 @@ public class RTalk {
             }
             NodeRedis r = getRedis();
             return _getJob(r, id).then(j -> {
-                if (j == null) {
+                if (j == null || !Job.RESERVED.equals(j.state)) {
                     return resolve(Response(NOT_FOUND, id));
                 }
                 return r.zaddAsync(kDelayQueue, $array(currentTimeMillis() + j.ttrMsec, id)).then(x -> {
@@ -697,7 +737,7 @@ public class RTalk {
     private void _kickJob(String id, long now, Multi tx, long pri) {
         tx.zrem(kBuried, id);
         tx.hset(kJob(id), fState, Job.READY);
-        tx.hincrBy(kJob(id), fKicks, 1);
+        tx.hincrby(kJob(id), fKicks, 1);
         tx.zadd(kReadyQueue, pri, id);
     }
 
@@ -783,7 +823,11 @@ public class RTalk {
     }
 
     private static long toLong(Object zcard) {
-        return zcard == null ? 0 : JSGlobal.parseInt(zcard);
+        int i = parseInt(zcard);
+        if (isNaN(i)) {
+            return 0;
+        }
+        return i;
     }
 
     private Promise<Job> _getJob(NodeRedis r, String id) {

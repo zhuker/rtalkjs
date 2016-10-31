@@ -3,8 +3,10 @@ package commander;
 import org.stjs.javascript.Array;
 import org.stjs.javascript.annotation.Native;
 import org.stjs.javascript.annotation.STJSBridge;
+import org.stjs.javascript.annotation.Template;
 import org.stjs.javascript.functions.Callback1;
 import org.stjs.javascript.functions.Callback2;
+import org.stjs.javascript.functions.Callback3;
 
 @STJSBridge
 public class Commander {
@@ -47,9 +49,27 @@ public class Commander {
     public Commander action(Callback1<String> object) {
         throw new RuntimeException("TODO Commander.action");
     }
+    
+    @Native
+    public Commander action(Callback2<String, String> object) {
+        throw new RuntimeException("TODO Commander.action");
+    }
 
     @Native
-    public Commander action(Callback2<String, Command> object) {
+    @Template("prefix")
+    public Commander $action(Callback1<Command> object) {
+        throw new RuntimeException("TODO Commander.action");
+    }
+
+    @Native
+    @Template("prefix")
+    public Commander $action(Callback2<String, Command> object) {
+        throw new RuntimeException("TODO Commander.action");
+    }
+
+    @Native
+    @Template("prefix")
+    public Commander $action(Callback3<String, String, Command> object) {
         throw new RuntimeException("TODO Commander.action");
     }
     
