@@ -15,6 +15,11 @@ public class NodeRedis {
     }
 
     @Native
+    public static NodeRedis createClient(String url) {
+        return null;
+    }
+
+    @Native
     public void exists(String key, Callback2<Object, Integer> responseCallback) {
     }
 
@@ -49,7 +54,7 @@ public class NodeRedis {
     }
 
     @Native
-    public Promise<Map<String, String>> hgetAllAsync(String kJob) {
+    public Promise<Map<String, String>> hgetallAsync(String kJob) {
         throw new RuntimeException("TODO NodeRedis.hgetAllAsync");
     }
 
@@ -82,6 +87,11 @@ public class NodeRedis {
     @Native
     public Promise<String> getAsync(String k) {
         throw new RuntimeException("TODO NodeRedis.getAsync");
+    }
+
+    @Native
+    public void quit() {
+        throw new RuntimeException("TODO NodeRedis.quit");
     }
 
 }

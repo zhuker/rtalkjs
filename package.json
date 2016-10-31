@@ -23,7 +23,18 @@
   "homepage": "https://github.com/zhuker/rtalkjs#readme",
   "dependencies": {
     "bluebird": "^3.4.6",
+    "commander": "^2.9.0",
+    "moment-timezone": "^0.5.7",
+    "printj": "^0.1.1",
     "redis": "^2.6.2",
     "rx": "^4.1.0"
+  },
+  "devDependencies": {
+    "grunt": "^1.0.1",
+    "grunt-contrib-concat": "^1.0.1",
+    "grunt-contrib-watch": "^1.0.0"
+  },
+  "bin": {
+	"rtalk": "./rtalk.js"
   }
 }

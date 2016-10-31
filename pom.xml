@@ -3,7 +3,7 @@
     <modelVersion>4.0.0</modelVersion>
     <groupId>com.vg</groupId>
     <artifactId>rtalkjs</artifactId>
-    <version>0.0.1-SNAPSHOT</version>
+    <version>0.0.1</version>
     <properties>
         <stjs.version>3.3.0</stjs.version>
         <stjs.plugin.version>3.3.0</stjs.plugin.version>
@@ -143,6 +143,11 @@
             <groupId>org.st-js.bridge</groupId>
             <artifactId>html</artifactId>
             <version>5.0.bv22</version>
+        </dependency>
+        <dependency>
+            <groupId>com.vg</groupId>
+            <artifactId>nodejs-bridge</artifactId>
+            <version>5.10.1</version>
         </dependency>
     </dependencies>
 </project>

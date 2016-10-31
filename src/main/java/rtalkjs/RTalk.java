@@ -1,22 +1,36 @@
 package rtalkjs;
 
+import static com.vg.js.node.NodeJS.process;
+import static com.vg.js.node.NodeJS.require;
+import static org.stjs.javascript.Global.console;
 import static org.stjs.javascript.JSCollections.$array;
 import static org.stjs.javascript.JSGlobal.Boolean;
+import static org.stjs.javascript.JSGlobal.JSON;
+import static org.stjs.javascript.JSObjectAdapter.$get;
 import static org.stjs.javascript.Promise.resolve;
 import static rtalkjs.Platform.currentTimeMillis;
+import static rtalkjs.PrintJ.sprintf;
+
+import javax.xml.soap.Node;
 
 import com.vg.js.bridge.Rx.Observable;
+import com.vg.js.node.FS;
+import com.vg.js.node.NodeJS;
 
 import org.stjs.javascript.Array;
+import org.stjs.javascript.Global;
 import org.stjs.javascript.JSGlobal;
+import org.stjs.javascript.JSObjectAdapter;
 import org.stjs.javascript.Map;
 import org.stjs.javascript.Promise;
 import org.stjs.javascript.annotation.Native;
 import org.stjs.javascript.functions.Callback1;
 import org.stjs.javascript.functions.Callback2;
 
+import commander.Commander;
 import noderedis.Multi;
 import noderedis.NodeRedis;
+import rtalkjs.RTalk.Job;
 
 public class RTalk {
 
@@ -41,7 +55,7 @@ public class RTalk {
 
     protected final String tube;
 
-    public RTalk(NodeRedis jedis, String tube) {
+    public RTalk(NodeRedis client, String tube) {
         if (!Boolean(tube)) {
             tube = "default";
         }
@@ -51,20 +65,79 @@ public class RTalk {
         this.kBuried = tube + "_buried";
         this.kDeleteCount = tube + "_deleted";
         this.kReserveCount = tube + "_reserved";
+        this.client = client;
     }
-    
+
     NodeRedis client;
 
     protected NodeRedis getRedis() {
         return client;
     }
-    
+
+    public static void main(String[] args) throws Exception {
+        Commander program = require("commander");
+        program
+                .version("0.0.1")
+                .option("-u, --url [url]", "Redis URL [redis://localhost:6379]", "redis://localhost:6379")
+                .command("stats-tube <tube>")
+                .action((tube) -> {
+                    console.log("stats-tube", tube);
+                    String url = (String) $get(program, "url");
+                    NodeRedis r = NodeRedis.createClient(url);
+                    RTalk rtalk = new RTalk(r, tube);
+                    rtalk.statsTube().$then(response -> {
+                        console.log(response);
+                        r.quit();
+                    });
+                });
+        program.command("stats-jobs <tube>").option("-H, --human", "Print in human-readable format").action(
+                (tube, cmd) -> {
+                    console.log("stats-jobs", tube);
+                    boolean human = Boolean($get(cmd, "human"));
+                    String url = (String) $get(program, "url");
+                    NodeRedis r = NodeRedis.createClient(url);
+                    RTalk rtalk = new RTalk(r, tube);
+
+                    console.log(sprintf("%5.5s %19.19s %13.13s %4s %4s %4s %4s %4s %4s %s %s", "State", "Ready Time",
+                            "TTR Duration", "Pri", "Rsrv", "Rels", "Bury", "Kick", "Tout", "id", "data"));
+                    rtalk.statsJobs().$finally(() -> {
+                        r.quit();
+                    }).subscribe(job -> {
+                        if (human) {
+                            String readyTime = Moment.$invoke(job.readyTime).calendar();
+                            String duration = Moment.duration(job.ttrMsec).humanize();
+                            console.log(sprintf("%5.5s %19.19s %13.13s %3d %4d %4d %4d %4d %4d %s %s", job.state,
+                                    readyTime, duration, job.pri, job.reserves, job.releases, job.buries, job.kicks,
+                                    job.timeouts, job.id,
+                                    escape(job.data) + (job.error == null ? "" : " " + escape(job.error))));
+                        } else {
+                            console.log(JSON.stringify(job));
+                        }
+                    }, err -> {
+                        console.error("unhandled", err);
+                    });
+                });
+
+        program.parse(process.argv);
+
+        if (process.argv.slice(2).$length() == 0) {
+            program.help();
+            return;
+        }
+    }
+
+    private static String escape(String data) {
+        if (data == null)
+            return "(null)";
+        return data.replaceAll("\n", "\\n");
+    }
+
     protected Promise<Array> updateRedisTransaction(Callback1<Multi> m) {
         Multi multi = getRedis().multi();
         m.$invoke(multi);
         return multi.execAsync();
     }
-    
+
     public String getTube() {
         return tube;
     }
@@ -275,37 +348,24 @@ public class RTalk {
             }
             long _ttrMsec = Math.max(1000, ttrMsec);
             String status = delayMsec > 0 ? Job.DELAYED : Job.READY;
-            //          updateRedisTransaction(r -> {
-            Multi r = getRedis().multi();
-            long now = Platform.currentTimeMillis();
-            if (delayMsec > 0) {
-                long readyTimeMsec = now + delayMsec;
-                r.zadd(kDelayQueue, readyTimeMsec, id);
-            } else {
-                r.zadd(kReadyQueue, pri, id);
-            }
-            r.hset(kJob(id), fPriority, Long.toString(pri));
-            r.hset(kJob(id), fTtr, Long.toString(_ttrMsec));
-            r.hset(kJob(id), fData, data);
-            r.hset(kJob(id), fState, status);
-            r.hset(kJob(id), fCtime, Long.toString(now));
-            r.hset(kJob(id), fTube, tube);
-            Promise<Array> exec = toPromise(cb -> r.exec(cb));
+            Promise<Array> exec = updateRedisTransaction(tx -> {
+                long now = Platform.currentTimeMillis();
+                if (delayMsec > 0) {
+                    long readyTimeMsec = now + delayMsec;
+                    tx.zadd(kDelayQueue, readyTimeMsec, id);
+                } else {
+                    tx.zadd(kReadyQueue, pri, id);
+                }
+                tx.hset(kJob(id), fPriority, Long.toString(pri));
+                tx.hset(kJob(id), fTtr, Long.toString(_ttrMsec));
+                tx.hset(kJob(id), fData, data);
+                tx.hset(kJob(id), fState, status);
+                tx.hset(kJob(id), fCtime, Long.toString(now));
+                tx.hset(kJob(id), fTube, tube);
+            });
             return exec.then(a -> resolve(on(Response(INSERTED, id, data))));
         });
         return put;
-    }
-
-    static <T> Promise<T> toPromise(Callback1<Callback2<Object, T>> f) {
-        Promise<T> p = new Promise<>((resolve, reject) -> {
-            f.$invoke((e, r) -> {
-                if (e != null) {
-                    reject.$invoke(e);
-                }
-                resolve.$invoke(r);
-            });
-        });
-        return p;
     }
 
     protected Response on(Response response) {
@@ -333,7 +393,7 @@ public class RTalk {
     public Promise<Boolean> contains(String id) {
         return getRedis().existsAsync(kJob(id)).then(i -> resolve(Boolean(i)));
     }
-    
+
     private Promise<Boolean> _isBuried(String id) {
         return getRedis().zscoreAsync(kBuried, id).then(i -> resolve(i != null));
     }
@@ -426,7 +486,7 @@ public class RTalk {
     private Response Response(String status, String id) {
         return new Response(getTube(), status, id, null);
     }
-    
+
     private Response Response(String status, String id, String data) {
         return new Response(getTube(), status, id, data);
     }
@@ -435,14 +495,15 @@ public class RTalk {
     public Promise<Response> bury(String id, long pri) {
         return bury(id, pri, null);
     }
-    
+
     public Observable<Long> _pri(NodeRedis r, String id) {
         return toLongRx(r.hgetAsync(kJob(id), fPriority));
     }
-    
+
     private static Observable<Long> toLongRx(Promise<String> hgetAsync) {
         return Observable.fromPromise(hgetAsync).map(str -> toLong(str));
     }
+
     /**
      * The release command puts a reserved job back into the ready queue (and
      * marks its state as "ready") to be run by any client. It is normally used
@@ -485,27 +546,27 @@ public class RTalk {
             }).then(a -> resolve(on(Response(RELEASED, id))));
         });
     }
-    
+
     public Promise<Response> reserve(long blockTimeoutMsec) {
         long now = Platform.currentTimeMillis();
         NodeRedis r = getRedis();
-        
+
         Observable<Long> readyQueueSize_ = rxLong(r.zcardAsync(kReadyQueue));
         Observable<Integer> copyToReadyQueue = readyQueueSize_.concatMap(readyQueueSize -> {
             if (readyQueueSize == 0) {
                 Observable<Long> delayQueueSize_ = rxLong(r.zcardAsync(kDelayQueue));
                 Observable<Integer> concatMap3 = delayQueueSize_.concatMap(delayQueueSize -> {
-                   if (delayQueueSize == 0) {
-                       return Observable.just(0);
-                   }
-                   Observable<String> delayedIds_ = rxArray(r.zrangebyscoreAsync(kDelayQueue, 0, now));
-                   return prioritiesArray(r, delayedIds_).concatMap(arr -> rx(r.zaddAsync(kReadyQueue, arr)));
+                    if (delayQueueSize == 0) {
+                        return Observable.just(0);
+                    }
+                    Observable<String> delayedIds_ = rxArray(r.zrangebyscoreAsync(kDelayQueue, 0, now));
+                    return prioritiesArray(r, delayedIds_).concatMap(arr -> rx(r.zaddAsync(kReadyQueue, arr)));
                 });
                 return concatMap3;
             }
             return Observable.just(0);
         });
-        
+
         Observable<String> ids = rxArray(r.zrangeAsync(kReadyQueue, 0, 0));
         Observable<Job> jobs = ids.concatMap(id -> rx(_getJob(r, id)));
         Observable<Job> firstJob_ = jobs.filter(j -> j != null && !Job.BURIED.equals(j.state)).take(1);
@@ -521,11 +582,11 @@ public class RTalk {
                 return on(Response(RESERVED, j.id, j.data));
             });
         }).defaultIfEmpty(Response(TIMED_OUT, null, null));
-        
-        Observable<Response> responseRx_ = copyToReadyQueue.ignoreElements().concat((Observable)responseRx);
+
+        Observable<Response> responseRx_ = copyToReadyQueue.ignoreElements().concat((Observable) responseRx);
         return responseRx_.toPromise();
     }
-    
+
     /**
      * The "touch" command allows a worker to request more time to work on a
      * job. This is useful for jobs that potentially take a long time, but you
@@ -603,6 +664,7 @@ public class RTalk {
         });
         return prisRx.count().toPromise();
     }
+
     /**
      * The kick-job command is a variant of kick that operates with a single job
      * identified by its job id. If the given job id exists and is in a buried
@@ -631,13 +693,14 @@ public class RTalk {
             }).map(x -> on(Response(KICKED, id))).toPromise();
         });
     }
+
     private void _kickJob(String id, long now, Multi tx, long pri) {
         tx.zrem(kBuried, id);
         tx.hset(kJob(id), fState, Job.READY);
         tx.hincrBy(kJob(id), fKicks, 1);
         tx.zadd(kReadyQueue, pri, id);
     }
-    
+
     /**
      * The stats-job command gives statistical information about the specified
      * job if it exists. Its form is:
@@ -720,18 +783,18 @@ public class RTalk {
     }
 
     private static long toLong(Object zcard) {
-        return JSGlobal.parseInt(zcard);
+        return zcard == null ? 0 : JSGlobal.parseInt(zcard);
     }
-    
+
     private Promise<Job> _getJob(NodeRedis r, String id) {
-        Promise<Map<String, String>> _job = r.hgetAllAsync(kJob(id));
+        Promise<Map<String, String>> _job = r.hgetallAsync(kJob(id));
         Promise<Job> then = _job.then(job -> {
             if (Platform.isEmptyMap(job))
                 return Promise.resolve(null);
 
             Promise<Double> _readyTime = r.zscoreAsync(kDelayQueue, id);
             Promise<Job> jobp = _readyTime.then(readyTime -> {
-                
+
                 Job j = new Job();
                 if (readyTime != null) {
                     j.readyTime = toLong(readyTime);
@@ -758,7 +821,6 @@ public class RTalk {
         });
         return then;
     }
-    
 
     public static class StatsTube {
         public String name;
@@ -827,26 +889,33 @@ public class RTalk {
         m.zcard(kDelayQueue);
         m.zcard(kBuried);
         m.get(kReserveCount);
-        m.zcard(kDelayQueue);
         m.get(kDeleteCount);
-        
-        return m.execAsync().then(arr -> {
-           long zkReadyQueue = toLong(arr.$get(0)); 
-           long zkDelayQueueNow = toLong(arr.$get(1)); 
-           long zkDelayQueue = toLong(arr.$get(2)); 
-           long zkBuried = toLong(arr.$get(3)); 
-           long zkReserveCount = toLong(arr.$get(4)); 
-           long zkDeleteCount = toLong(arr.$get(5)); 
-           StatsTube stats = new StatsTube();
-           stats.name = tube;
-           stats.currentjobsready = zkReadyQueue + zkDelayQueueNow;
-           stats.currentjobsdelayed = zkDelayQueue;
-           stats.currentjobsburied = zkBuried;
-           stats.currentjobsreserved = zkReserveCount;
-           stats.totaljobs = zkReadyQueue + zkDelayQueue;
-           stats.cmddelete = zkDeleteCount;
-           return resolve(stats);
-        });
 
+        return m.execAsync().then(arr -> {
+            long zkReadyQueue = toLong(arr.$get(0));
+            long zkDelayQueueNow = toLong(arr.$get(1));
+            long zkDelayQueue = toLong(arr.$get(2));
+            long zkBuried = toLong(arr.$get(3));
+            long zkReserveCount = toLong(arr.$get(4));
+            long zkDeleteCount = toLong(arr.$get(5));
+            StatsTube stats = new StatsTube();
+            stats.name = tube;
+            stats.currentjobsready = zkReadyQueue + zkDelayQueueNow;
+            stats.currentjobsdelayed = zkDelayQueue;
+            stats.currentjobsburied = zkBuried;
+            stats.currentjobsreserved = zkReserveCount;
+            stats.totaljobs = zkReadyQueue + zkDelayQueue;
+            stats.cmddelete = zkDeleteCount;
+            return resolve(stats);
+        });
+    }
+
+    public Observable<Job> statsJobs() {
+        NodeRedis r = getRedis();
+        Observable<String> buried = rxArray(r.zrangeAsync(kBuried, 0, -1));
+        Observable<String> ready = rxArray(r.zrangeAsync(kReadyQueue, 0, -1));
+        Observable<String> delayed = rxArray(r.zrangeAsync(kDelayQueue, 0, -1));
+        Observable<String> ids = Observable.concat($array(buried, ready, delayed));
+        return ids.concatMap(id -> rx(_getJob(r, id)));
     }
 }
