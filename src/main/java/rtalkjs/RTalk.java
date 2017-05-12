@@ -152,7 +152,7 @@ public class RTalk {
                     String duration = Moment.duration(job.ttrMsec).humanize();
                     console.log(sprintf("%5.5s %19.19s %13.13s %3d %4d %4d %4d %4d %4d %s %s", job.state, readyTime,
                             duration, job.pri, job.reserves, job.releases, job.buries, job.kicks, job.timeouts, job.id,
-                            escape(job.data) + (job.error == null ? "" : " " + escape(job.error))));
+                            escape(job.data.substring(0, 100)) + (job.error == null ? "" : " " + escape(job.error))));
                 } else {
                     console.log(JSON.stringify(job));
                 }

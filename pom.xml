@@ -137,12 +137,12 @@
         <dependency>
             <groupId>com.vg</groupId>
             <artifactId>rxjs-bridge</artifactId>
-            <version>0.0.18</version>
+            <version>4.1.0-22</version>
         </dependency>
         <dependency>
             <groupId>org.st-js.bridge</groupId>
             <artifactId>html</artifactId>
-            <version>5.0.bv22</version>
+            <version>5.0.bv31</version>
         </dependency>
         <dependency>
             <groupId>com.vg</groupId>
