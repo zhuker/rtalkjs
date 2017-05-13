@@ -1096,7 +1096,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                 if (human) {
                     var readyTime = Moment(job.readyTime).calendar();
                     var duration = Moment.duration(job.ttrMsec).humanize();
-                    console.log(PrintJ.sprintf("%5.5s %19.19s %13.13s %3d %4d %4d %4d %4d %4d %s %s", job.state, readyTime, duration, job.pri, job.reserves, job.releases, job.buries, job.kicks, job.timeouts, job.id, RTalk.escape(job.data) + (job.error == null ? "" : " " + RTalk.escape(job.error))));
+                    console.log(PrintJ.sprintf("%5.5s %19.19s %13.13s %3d %4d %4d %4d %4d %4d %s %s", job.state, readyTime, duration, job.pri, job.reserves, job.releases, job.buries, job.kicks, job.timeouts, job.id, RTalk.escape(job.data.substring(0, 100)) + (job.error == null ? "" : " " + RTalk.escape(job.error))));
                 } else {
                     console.log(JSON.stringify(job));
                 }

@@ -1,6 +1,6 @@
 {
   "name": "rtalkjs",
-  "version": "1.0.1",
+  "version": "1.0.2",
   "description": "RTalk in JavaScript",
   "main": "index.js",
   "scripts": {
