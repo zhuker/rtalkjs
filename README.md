@@ -17,6 +17,7 @@ rtalk
     reserve               
     touch <jobid>         
     stats-jobs [options]  
+    flush
 
   Options:
 
@@ -25,3 +26,14 @@ rtalk
     -u, --url [url]    Redis URL [redis://localhost:6379/0]
     -t, --tube [tube]  RTalk tube to use [default]
 ```
+
+## Show jobs in a tube
+
+Default redis location
+
+`rtalk -t myTube stats-jobs -H`
+
+Custom redis location
+
+`rtalk -u redis://localhost:6379/0 -t myTube stats-jobs -H`
+
