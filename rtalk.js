@@ -1025,7 +1025,7 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
     };
     constructor.main = function(args) {
         var program = require("commander");
-        program.version("0.0.1").option("-u, --url [url]", "Redis URL [redis://localhost:6379/0]", "redis://localhost:6379/0").option("-t, --tube [tube]", "RTalk tube to use [default]", "default").command("stats-tube").action(function(e) {
+        program.version("1.0.3").option("-u, --url [url]", "Redis URL [redis://localhost:6379/0]", "redis://localhost:6379/0").option("-t, --tube [tube]", "RTalk tube to use [default]", "default").command("stats-tube").action(function(e) {
             var tube = RTalk.toStr((program)["tube"]);
             console.log("stats-tube", tube);
             var url = RTalk.toStr((program)["url"]);
@@ -1102,6 +1102,20 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                 }
             }, function(err) {
                 console.error("unhandled", err);
+            });
+        });
+        program.command("flush").action(function(cmd) {
+            var tube = RTalk.toStr((program)["tube"]);
+            console.log("flush", tube);
+            var url = RTalk.toStr((program)["url"]);
+            var r = NodeRedis.createClient(url);
+            var rtalk = new RTalk(r, tube);
+            rtalk.flushTube().subscribe(function(id) {
+                console.log(RTalk.DELETED, id);
+            }, function(err) {
+                console.log(err);
+            }, function() {
+                r.quit();
             });
         });
         program.parse(process.argv);
@@ -1431,18 +1445,16 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
             if (!_contains) {
                 return Promise.resolve(this.Response(RTalk.NOT_FOUND, id));
             }
-            var then = this.getRedis().hgetAsync(this.kJob(id), RTalk.fData).then(stjs.bind(this, function(data) {
-                return this.updateRedisTransaction(stjs.bind(this, function(tx) {
-                    tx.zrem(this.kDelayQueue, id);
-                    tx.zrem(this.kReadyQueue, id);
-                    tx.del(this.kJob(id));
-                    tx.incr(this.kDeleteCount);
-                    tx.decr(this.kReserveCount);
-                })).then(stjs.bind(this, function(a) {
-                    return Promise.resolve(this.on(this.Response(RTalk.DELETED, id, data)));
-                }));
+            var then2 = this.updateRedisTransaction(stjs.bind(this, function(tx) {
+                tx.zrem(this.kDelayQueue, id);
+                tx.zrem(this.kReadyQueue, id);
+                tx.del(this.kJob(id));
+                tx.incr(this.kDeleteCount);
+                tx.decr(this.kReserveCount);
+            })).then(stjs.bind(this, function(a) {
+                return Promise.resolve(this.on(this.Response(RTalk.DELETED, id)));
             }));
-            return then;
+            return then2;
         }));
     };
     prototype.Response = function(status, id, data) {
@@ -1771,7 +1783,8 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
                     }
                 }
                 j.pri = RTalk.toLong(job[RTalk.fPriority]);
-                j.data = job[RTalk.fData];
+                j.data = RTalk.substr(job[RTalk.fData], 0, 64 * 1024);
+                delete job[RTalk.fData];
                 j.ttrMsec = RTalk.toLong(job[RTalk.fTtr]);
                 j.id = id;
                 j.reserves = RTalk.toLong(job[RTalk.fReserves]);
@@ -1787,6 +1800,12 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
             return jobp;
         }));
         return then;
+    };
+    constructor.substr = function(str, start, end) {
+        if (str == null || str.length < (end - start)) {
+            return str;
+        }
+        return str.substring(start, end);
     };
     constructor.StatsTube = function() {};
     constructor.StatsTube = stjs.extend(constructor.StatsTube, null, [], function(constructor, prototype) {
@@ -1883,6 +1902,18 @@ RTalk = stjs.extend(RTalk, null, [], function(constructor, prototype) {
         var ids = Rx.Observable.concat([buried, ready, delayed]);
         return ids.concatMap(stjs.bind(this, function(id) {
             return RTalk.rx(this._getJob(r, id));
+        }));
+    };
+    prototype.flushTube = function() {
+        var r = this.getRedis();
+        var buried = RTalk.rxArray(r.zrangeAsync(this.kBuried, 0, -1));
+        var ready = RTalk.rxArray(r.zrangeAsync(this.kReadyQueue, 0, -1));
+        var delayed = RTalk.rxArray(r.zrangeAsync(this.kDelayQueue, 0, -1));
+        var ids = Rx.Observable.concat([buried, ready, delayed]);
+        return ids.concatMap(stjs.bind(this, function(id) {
+            return RTalk.rx(this.Delete(id)).map(function(_r) {
+                return _r.id;
+            });
         }));
     };
 }, {client: "NodeRedis"}, {});

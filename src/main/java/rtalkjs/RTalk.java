@@ -24,6 +24,7 @@ import org.stjs.javascript.functions.Callback1;
 import commander.Commander;
 import noderedis.Multi;
 import noderedis.NodeRedis;
+import rtalkjs.RTalk.Response;
 
 public class RTalk {
 
@@ -70,7 +71,7 @@ public class RTalk {
     public static void main(String[] args) throws Exception {
         Commander program = require("commander");
         program
-                .version("0.0.1")
+                .version("1.0.3")
                 .option("-u, --url [url]", "Redis URL [redis://localhost:6379/0]", "redis://localhost:6379/0")
                 .option("-t, --tube [tube]", "RTalk tube to use [default]", "default")
                 .command("stats-tube")
@@ -160,7 +161,20 @@ public class RTalk {
                 console.error("unhandled", err);
             });
         });
-
+        program.command("flush").$action((cmd) -> {
+            String tube = toStr($get(program, "tube"));
+            console.log("flush", tube);
+            String url = toStr($get(program, "url"));
+            NodeRedis r = NodeRedis.createClient(url);
+            RTalk rtalk = new RTalk(r, tube);
+            rtalk.flushTube().subscribe(id -> {
+                console.log(DELETED, id);
+            }, err -> {
+                console.log(err);
+            }, () -> {
+                r.quit();
+            });
+        });
         program.parse(process.argv);
 
         if (process.argv.slice(2).$length() == 0) {
@@ -519,16 +533,14 @@ public class RTalk {
             if (!_contains) {
                 return resolve(Response(NOT_FOUND, id));
             }
-            Promise<Response> then = getRedis().hgetAsync(kJob(id), fData).then(data -> {
-                return updateRedisTransaction(tx -> {
-                    tx.zrem(kDelayQueue, id);
-                    tx.zrem(kReadyQueue, id);
-                    tx.del(kJob(id));
-                    tx.incr(kDeleteCount);
-                    tx.decr(kReserveCount);
-                }).then(a -> resolve(on(Response(DELETED, id, data))));
-            });
-            return then;
+            Promise<rtalkjs.RTalk.Response> then2 = updateRedisTransaction(tx -> {
+                tx.zrem(kDelayQueue, id);
+                tx.zrem(kReadyQueue, id);
+                tx.del(kJob(id));
+                tx.incr(kDeleteCount);
+                tx.decr(kReserveCount);
+            }).then(a -> resolve(on(Response(DELETED, id))));
+            return then2;
         });
     }
 
@@ -864,7 +876,8 @@ public class RTalk {
                     }
                 }
                 j.pri = toLong(job.$get(fPriority));
-                j.data = job.$get(fData);
+                j.data = substr(job.$get(fData), 0, 64 * 1024);
+                job.$delete(fData);
                 j.ttrMsec = toLong(job.$get(fTtr));
                 j.id = id;
                 j.reserves = toLong(job.$get(fReserves));
@@ -880,6 +893,13 @@ public class RTalk {
             return jobp;
         });
         return then;
+    }
+
+    private static String substr(String str, int start, int end) {
+        if (str == null || str.length() < (end - start)){
+            return str;
+        }
+        return str.substring(start, end);
     }
 
     public static class StatsTube {
@@ -979,5 +999,14 @@ public class RTalk {
         Observable<String> delayed = rxArray(r.zrangeAsync(kDelayQueue, 0, -1));
         Observable<String> ids = Observable.concat($array(buried, ready, delayed));
         return ids.concatMap(id -> rx(_getJob(r, id)));
+    }
+    
+    public Observable<String> flushTube() {
+        NodeRedis r = getRedis();
+        Observable<String> buried = rxArray(r.zrangeAsync(kBuried, 0, -1));
+        Observable<String> ready = rxArray(r.zrangeAsync(kReadyQueue, 0, -1));
+        Observable<String> delayed = rxArray(r.zrangeAsync(kDelayQueue, 0, -1));
+        Observable<String> ids = Observable.concat($array(buried, ready, delayed));
+        return ids.concatMap(id -> rx(Delete(id)).map(_r -> _r.id));
     }
 }
